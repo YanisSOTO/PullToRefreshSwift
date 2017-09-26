@@ -5,6 +5,7 @@
 //  Created by Yuji Hato on 12/11/14.
 //  Qiulang rewrites it to support pull down & push up
 //
+
 import UIKit
 
 open class PullToRefreshView: UIView {
@@ -16,18 +17,14 @@ open class PullToRefreshView: UIView {
         case finish
     }
     
-    // MARK: Variables
-    let contentOffsetKeyPath = "contentOffset"
-    let contentSizeKeyPath = "contentSize"
-    var kvoContext = "PullToRefreshKVOContext"
-    
     fileprivate var options: PullToRefreshOption
     fileprivate var backgroundView: UIView
     fileprivate var arrow: UIImageView
     fileprivate var indicator: UIActivityIndicatorView
     fileprivate var scrollViewInsets: UIEdgeInsets = UIEdgeInsets.zero
-    fileprivate var refreshCompletion: ((Void) -> Void)?
+    fileprivate var refreshCompletion: (() -> ())?
     fileprivate var pull: Bool = true
+    fileprivate var observers = [NSKeyValueObservation]()
     
     fileprivate var positionY:CGFloat = 0 {
         didSet {
@@ -71,17 +68,17 @@ open class PullToRefreshView: UIView {
     
     // MARK: UIView
     public override convenience init(frame: CGRect) {
-        self.init(options: PullToRefreshOption(),frame:frame, refreshCompletion:nil)
+        self.init(options: PullToRefreshOption(), frame: frame, refreshCompletion: nil)
     }
     
     public required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
     
-    public init(options: PullToRefreshOption, frame: CGRect, refreshCompletion :((Void) -> Void)?, down:Bool=true) {
+    public init(options: PullToRefreshOption, frame: CGRect, refreshCompletion: (() -> Void)?, down: Bool = true) {
         self.options = options
         self.refreshCompletion = refreshCompletion
-
+        
         self.backgroundView = UIView(frame: CGRect(x: 0, y: 0, width: frame.size.width, height: frame.size.height))
         self.backgroundView.backgroundColor = self.options.backgroundColor
         self.backgroundView.autoresizingMask = UIViewAutoresizing.flexibleWidth
@@ -105,7 +102,7 @@ open class PullToRefreshView: UIView {
         self.addSubview(arrow)
         self.autoresizingMask = .flexibleWidth
     }
-   
+    
     open override func layoutSubviews() {
         super.layoutSubviews()
         self.arrow.center = CGPoint(x: self.frame.size.width / 2, y: self.frame.size.height / 2)
@@ -120,41 +117,35 @@ open class PullToRefreshView: UIView {
         guard let scrollView = superView as? UIScrollView else {
             return
         }
-        scrollView.addObserver(self, forKeyPath: contentOffsetKeyPath, options: .initial, context: &kvoContext)
+        
+        var observer = scrollView.observe(\.contentOffset, options: [.initial, .new]) { [weak self] (scrollView, _) in
+            self?.handleScrollViewContentUpdate(scrollView: scrollView)
+        }
+        observers.append(observer)
+        
         if !pull {
-            scrollView.addObserver(self, forKeyPath: contentSizeKeyPath, options: .initial, context: &kvoContext)
+            observer = scrollView.observe(\.contentSize, options: [.initial, .new], changeHandler: { [weak self] (scrollView, _) in
+                self?.handleScrollViewContentUpdate(scrollView: scrollView)
+            })
+            observers.append(observer)
         }
     }
     
     fileprivate func removeRegister() {
-        if let scrollView = superview as? UIScrollView {
-            scrollView.removeObserver(self, forKeyPath: contentOffsetKeyPath, context: &kvoContext)
-            if !pull {
-                scrollView.removeObserver(self, forKeyPath: contentSizeKeyPath, context: &kvoContext)
-            }
+        for observer in observers {
+            observer.invalidate()
         }
+        
+        observers = []
     }
     
     deinit {
         self.removeRegister()
     }
     
-    // MARK: KVO
+    // MARK: private
     
-    open override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-        guard let scrollView = object as? UIScrollView else {
-            return
-        }
-        if keyPath == contentSizeKeyPath {
-            self.positionY = scrollView.contentSize.height
-            return
-        }
-        
-        if !(context == &kvoContext && keyPath == contentOffsetKeyPath) {
-            super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
-            return
-        }
-        
+    fileprivate func handleScrollViewContentUpdate(scrollView: UIScrollView) {
         // Pulling State Check
         let offsetY = scrollView.contentOffset.y
         
@@ -171,7 +162,7 @@ open class PullToRefreshView: UIView {
             if !self.pull {
                 return
             }
-
+            
             if offsetY < -self.frame.size.height {
                 // pulling or refreshing
                 if scrollView.isDragging == false && self.state != .refreshing { //release the finger
@@ -206,7 +197,6 @@ open class PullToRefreshView: UIView {
             }
         }
     }
-    
     // MARK: private
     
     fileprivate func startAnimating() {
@@ -225,19 +215,19 @@ open class PullToRefreshView: UIView {
         }
         scrollView.bounces = false
         UIView.animate(withDuration: PullToRefreshConst.animationDuration,
-                                   delay: 0,
-                                   options:[],
-                                   animations: {
-            scrollView.contentInset = insets
-            },
-                                   completion: { _ in
-                if self.options.autoStopTime != 0 {
-                    let time = DispatchTime.now() + Double(Int64(self.options.autoStopTime * Double(NSEC_PER_SEC))) / Double(NSEC_PER_SEC)
-                    DispatchQueue.main.asyncAfter(deadline: time) {
-                        self.state = .stop
-                    }
-                }
-                self.refreshCompletion?()
+                       delay: 0,
+                       options:[],
+                       animations: {
+                        scrollView.contentInset = insets
+        },
+                       completion: { _ in
+                        if self.options.autoStopTime != 0 {
+                            let time = DispatchTime.now() + Double(Int64(self.options.autoStopTime * Double(NSEC_PER_SEC))) / Double(NSEC_PER_SEC)
+                            DispatchQueue.main.asyncAfter(deadline: time) {
+                                self.state = .stop
+                            }
+                        }
+                        self.refreshCompletion?()
         })
     }
     
@@ -250,25 +240,25 @@ open class PullToRefreshView: UIView {
         scrollView.bounces = true
         let duration = PullToRefreshConst.animationDuration
         UIView.animate(withDuration: duration,
-                                   animations: {
-                                    scrollView.contentInset = self.scrollViewInsets
-                                    self.arrow.transform = CGAffineTransform.identity
-                                    }, completion: { _ in
+                       animations: {
+                        scrollView.contentInset = self.scrollViewInsets
+                        self.arrow.transform = CGAffineTransform.identity
+        }, completion: { _ in
             self.state = .pulling
         }
-        ) 
+        )
     }
     
     fileprivate func arrowRotation() {
         UIView.animate(withDuration: 0.2, delay: 0, options:[], animations: {
             // -0.0000001 for the rotation direction control
-            self.arrow.transform = CGAffineTransform(rotationAngle: CGFloat(M_PI-0.0000001))
+            self.arrow.transform = CGAffineTransform(rotationAngle: CGFloat(Double.pi-0.0000001))
         }, completion:nil)
     }
     
     fileprivate func arrowRotationBack() {
         UIView.animate(withDuration: 0.2, animations: {
             self.arrow.transform = CGAffineTransform.identity
-        }) 
+        })
     }
 }
